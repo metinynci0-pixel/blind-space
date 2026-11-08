@@ -9,7 +9,6 @@ export interface SettingsScreenProps {
   onSettingsChange: (changes: Partial<AccessibilitySettings>) => void;
   onLeftEarTest: () => void;
   onRightEarTest: () => void;
-  onSpeechTest: () => void;
   onBack: () => void;
 }
 
@@ -54,7 +53,6 @@ const SettingsScreen: FC<SettingsScreenProps> = ({
   onSettingsChange,
   onLeftEarTest,
   onRightEarTest,
-  onSpeechTest,
   onBack,
 }) => {
   const directionOptions: { value: DirectionAnnouncementFormat; label: string }[] = [
@@ -183,9 +181,6 @@ const SettingsScreen: FC<SettingsScreenProps> = ({
               </button>
               <button className="blind-button blind-button--compact" type="button" onClick={onRightEarTest}>
                 Sağ kulak testi
-              </button>
-              <button className="blind-button blind-button--compact" type="button" onClick={onSpeechTest}>
-                Konuşmayı test et
               </button>
             </div>
           </section>

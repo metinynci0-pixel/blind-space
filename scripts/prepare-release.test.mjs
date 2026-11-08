@@ -2,12 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { shouldBuildApk } from "./prepare-release.mjs";
 
-const previousManifest = { nativeVersion: "0.1.8" };
-const previousPackage = {
+const latestApkTag = "v0.1.8";
+const latestApkPackage = {
   dependencies: { "@capacitor/core": "^7.6.10" },
   devDependencies: { "@capacitor/cli": "^7.6.10" },
 };
-const previousLock = {
+const latestApkLock = {
   packages: {
     "node_modules/@capacitor/core": {
       version: "7.6.10",
@@ -18,30 +18,31 @@ const previousLock = {
 
 function input(overrides = {}) {
   return {
-    previousPackage,
-    currentPackage: previousPackage,
-    previousLock,
-    currentLock: previousLock,
-    previousManifest,
-    changedFiles: ["app/src/App.tsx"],
+    latestApkTag,
+    latestApkPackage,
+    currentPackage: latestApkPackage,
+    latestApkLock,
+    currentLock: latestApkLock,
+    nativeFilesSinceApk: ["app/src/App.tsx"],
     ...overrides,
   };
 }
 
-test("web-only changes publish OTA without rebuilding the APK", () => {
+test("web-only changes since the last APK publish OTA without rebuilding APK", () => {
   assert.equal(shouldBuildApk(input()), false);
 });
 
-test("adding a native Capacitor plugin rebuilds the APK", () => {
+test("native plugins added since the last APK rebuild the APK", () => {
   assert.equal(
     shouldBuildApk(
       input({
+        latestApkPackage,
         currentPackage: {
           dependencies: {
-            ...previousPackage.dependencies,
+            ...latestApkPackage.dependencies,
             "@capacitor/preferences": "^7.0.0",
           },
-          devDependencies: previousPackage.devDependencies,
+          devDependencies: latestApkPackage.devDependencies,
         },
       }),
     ),
@@ -49,13 +50,13 @@ test("adding a native Capacitor plugin rebuilds the APK", () => {
   );
 });
 
-test("a resolved native plugin version change rebuilds the APK", () => {
+test("a native lock version change since the last APK rebuilds the APK", () => {
   assert.equal(
     shouldBuildApk(
       input({
         currentLock: {
           packages: {
-            ...previousLock.packages,
+            ...latestApkLock.packages,
             "node_modules/@capacitor/core": {
               version: "7.7.0",
               resolved:
@@ -69,20 +70,19 @@ test("a resolved native plugin version change rebuilds the APK", () => {
   );
 });
 
-test("Android or Capacitor configuration changes rebuild the APK", () => {
+test("Android or Capacitor configuration changes since the last APK rebuild", () => {
   assert.equal(
-    shouldBuildApk(input({ changedFiles: ["android/app/build.gradle"] })),
+    shouldBuildApk(
+      input({ nativeFilesSinceApk: ["android/app/build.gradle"] }),
+    ),
     true,
   );
   assert.equal(
-    shouldBuildApk(input({ changedFiles: ["capacitor.config.ts"] })),
+    shouldBuildApk(input({ nativeFilesSinceApk: ["capacitor.config.ts"] })),
     true,
   );
 });
 
-test("a first release without existing metadata builds the APK", () => {
-  assert.equal(
-    shouldBuildApk(input({ previousManifest: null })),
-    true,
-  );
+test("a first release without an APK tag builds the APK", () => {
+  assert.equal(shouldBuildApk(input({ latestApkTag: null })), true);
 });

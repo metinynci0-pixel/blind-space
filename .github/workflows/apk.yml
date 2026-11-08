@@ -41,9 +41,7 @@ jobs:
       - name: Calculate release versions and native changes
         id: release
         env:
-          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
-          GITHUB_SHA: ${{ github.sha }}
         run: node scripts/prepare-release.mjs
 
       - name: Build web application

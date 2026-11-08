@@ -55,36 +55,32 @@ function nativeLockEntries(packageLock) {
 }
 
 export function shouldBuildApk({
-  previousPackage,
+  latestApkTag,
+  latestApkPackage,
   currentPackage,
-  previousLock,
+  latestApkLock,
   currentLock,
-  previousManifest,
-  changedFiles,
+  nativeFilesSinceApk,
 }) {
-  if (
-    !previousPackage ||
-    !previousManifest ||
-    typeof previousManifest.nativeVersion !== "string"
-  ) {
+  if (!latestApkTag || !latestApkPackage) {
     return true;
   }
 
   if (
-    JSON.stringify(nativeDependencies(previousPackage)) !==
+    JSON.stringify(nativeDependencies(latestApkPackage)) !==
     JSON.stringify(nativeDependencies(currentPackage))
   ) {
     return true;
   }
 
   if (
-    JSON.stringify(nativeLockEntries(previousLock)) !==
+    JSON.stringify(nativeLockEntries(latestApkLock)) !==
     JSON.stringify(nativeLockEntries(currentLock))
   ) {
     return true;
   }
 
-  return changedFiles.some(
+  return nativeFilesSinceApk.some(
     (filePath) =>
       /^(android|ios)\//.test(filePath) ||
       filePath === "capacitor.config.ts" ||
@@ -99,26 +95,27 @@ function main() {
   }
 
   const currentVersion = `0.1.${runNumber}`;
-  const before = process.env.GITHUB_EVENT_BEFORE;
-  const head = process.env.GITHUB_SHA;
-  const hasPreviousCommit =
-    typeof before === "string" && !/^0+$/.test(before) && before.length > 0;
-
   const currentPackage = parseJson(readGitFile("HEAD", "package.json"));
   const currentLock = parseJson(readGitFile("HEAD", "package-lock.json"));
-  const previousPackage = hasPreviousCommit
-    ? parseJson(readGitFile(before, "package.json"))
+  const previousManifest = parseJson(
+    readGitFile("origin/main", "updates/latest.json"),
+  );
+  const tags = execFileSync(
+    "git",
+    ["tag", "--list", "v*", "--sort=-version:refname"],
+    { encoding: "utf8" },
+  )
+    .split("\n")
+    .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag));
+  const latestApkTag = tags[0] ?? null;
+  const latestApkPackage = latestApkTag
+    ? parseJson(readGitFile(latestApkTag, "package.json"))
     : null;
-  const previousLock = hasPreviousCommit
-    ? parseJson(readGitFile(before, "package-lock.json"))
+  const latestApkLock = latestApkTag
+    ? parseJson(readGitFile(latestApkTag, "package-lock.json"))
     : null;
-  const previousManifest =
-    (hasPreviousCommit &&
-      parseJson(readGitFile(before, "updates/latest.json"))) ??
-    parseJson(readGitFile("origin/main", "updates/latest.json"));
-
-  const changedFiles = hasPreviousCommit
-    ? execFileSync("git", ["diff", "--name-only", before, head], {
+  const nativeFilesSinceApk = latestApkTag
+    ? execFileSync("git", ["diff", "--name-only", latestApkTag, "HEAD"], {
         encoding: "utf8",
       })
         .split("\n")
@@ -126,16 +123,16 @@ function main() {
     : [];
 
   const needsApk = shouldBuildApk({
-    previousPackage,
+    latestApkTag,
+    latestApkPackage,
     currentPackage,
-    previousLock,
+    latestApkLock,
     currentLock,
-    previousManifest,
-    changedFiles,
+    nativeFilesSinceApk,
   });
   const nativeVersion = needsApk
     ? currentVersion
-    : previousManifest.nativeVersion;
+    : latestApkTag?.slice(1) ?? previousManifest?.nativeVersion ?? currentVersion;
   const output = [
     `needs_apk=${needsApk}`,
     `content_version=${currentVersion}`,

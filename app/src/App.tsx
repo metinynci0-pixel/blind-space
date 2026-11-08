@@ -405,9 +405,6 @@ function App() {
         onSettingsChange={updateSettings}
         onLeftEarTest={() => runEarTest(227, "sol")}
         onRightEarTest={() => runEarTest(228, "sağ")}
-        onSpeechTest={() => {
-          void announce("Konuşma testi. Blind Space hazır.", 4);
-        }}
         onBack={returnToHome}
       />
     ) : (

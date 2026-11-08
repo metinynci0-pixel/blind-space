@@ -81,7 +81,13 @@ export async function getInstalledContentVersion(
 ): Promise<string> {
   try {
     const current = await CapacitorUpdater.current();
-    return current.bundle.version || builtInVersion;
+    const currentVersion = current.bundle.version;
+    if (!currentVersion || currentVersion === "builtin") {
+      return builtInVersion;
+    }
+
+    compareVersions(currentVersion, builtInVersion);
+    return currentVersion;
   } catch (error) {
     console.warn("Etkin içerik sürümü okunamadı; APK sürümü kullanılacak.", error);
     return builtInVersion;
