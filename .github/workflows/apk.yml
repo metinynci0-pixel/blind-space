@@ -23,7 +23,12 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+        run: |
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund --loglevel=verbose || {
+            log_file="$(ls -t "$HOME"/.npm/_logs/*debug-0.log | head -n 1)"
+            tail -n 120 "$log_file"
+            exit 1
+          }
 
       - name: Build web application
         run: npm run build
