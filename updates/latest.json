@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "contentVersion": "0.1.12",
+  "contentVersion": "0.1.13",
   "nativeVersion": "0.1.12",
-  "bundleUrl": "https://github.com/metinynci0-pixel/blind-space/releases/download/ota-v0.1.12/blind-space-update.zip",
-  "checksum": "ada5791c78d88c06af853b3b86d08ee1d990b335ef4073ccbc23e65a18b3f779"
+  "bundleUrl": "https://github.com/metinynci0-pixel/blind-space/releases/download/ota-v0.1.13/blind-space-update.zip",
+  "checksum": "ab7ef801ee332aef328e7bd07b5c1b2e3f62f3dc486747c24e2406ec7833a71c"
 }
