@@ -84,6 +84,7 @@ export function shouldBuildApk({
     (filePath) =>
       /^(android|ios)\//.test(filePath) ||
       filePath === "capacitor.config.ts" ||
+      filePath === "updates/update-protocol-version.txt" ||
       filePath.startsWith("patches/"),
   );
 }

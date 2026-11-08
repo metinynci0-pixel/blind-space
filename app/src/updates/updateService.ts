@@ -11,6 +11,7 @@ export interface UpdateManifest {
   contentVersion: string;
   nativeVersion: string;
   bundleUrl: string;
+  checksum: string;
 }
 
 export function isNativeApp(): boolean {
@@ -54,7 +55,9 @@ export async function getUpdateManifest(): Promise<UpdateManifest> {
     manifest.schemaVersion !== 1 ||
     typeof manifest.contentVersion !== "string" ||
     typeof manifest.nativeVersion !== "string" ||
-    typeof manifest.bundleUrl !== "string"
+    typeof manifest.bundleUrl !== "string" ||
+    typeof manifest.checksum !== "string" ||
+    !/^[a-f0-9]{64}$/i.test(manifest.checksum)
   ) {
     throw new Error("Güncelleme bilgisi eksik.");
   }

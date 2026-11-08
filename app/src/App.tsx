@@ -300,6 +300,7 @@ function App() {
         const bundle = await CapacitorUpdater.download({
           version: manifest.contentVersion,
           url: manifest.bundleUrl,
+          checksum: manifest.checksum,
         });
         if (!active) {
           return;

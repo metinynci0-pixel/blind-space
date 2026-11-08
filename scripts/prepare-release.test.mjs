@@ -83,6 +83,15 @@ test("Android or Capacitor configuration changes since the last APK rebuild", ()
   );
 });
 
+test("a changed OTA protocol version requires a new APK", () => {
+  assert.equal(
+    shouldBuildApk(
+      input({ nativeFilesSinceApk: ["updates/update-protocol-version.txt"] }),
+    ),
+    true,
+  );
+});
+
 test("a first release without an APK tag builds the APK", () => {
   assert.equal(shouldBuildApk(input({ latestApkTag: null })), true);
 });

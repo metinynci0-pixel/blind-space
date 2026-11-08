@@ -70,6 +70,12 @@ jobs:
           mkdir -p release-assets
           (cd app/dist && zip -qr "$GITHUB_WORKSPACE/release-assets/blind-space-update.zip" .)
 
+      - name: Calculate OTA bundle checksum
+        id: bundle
+        run: |
+          checksum="$(sha256sum release-assets/blind-space-update.zip | cut -d ' ' -f 1)"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
       - name: Set up Java 17
         if: steps.release.outputs.needs_apk == 'true'
         uses: actions/setup-java@v4
@@ -142,6 +148,7 @@ jobs:
           NATIVE_VERSION: ${{ steps.release.outputs.native_version }}
           OTA_TAG: ${{ steps.release.outputs.ota_tag }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          BUNDLE_CHECKSUM: ${{ steps.bundle.outputs.checksum }}
         run: node scripts/write-update-manifest.mjs "$RUNNER_TEMP/latest.json"
 
       - name: Publish latest OTA manifest on main
