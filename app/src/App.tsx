@@ -5,6 +5,7 @@ import { ScreenReader } from "@capacitor/screen-reader";
 import { CapacitorUpdater } from "@capgo/capacitor-updater";
 import HelpScreen from "./screens/HelpScreen";
 import HomeScreen from "./screens/HomeScreen";
+import SectorScreen from "./screens/SectorScreen";
 import SettingsScreen from "./screens/SettingsScreen";
 import {
   loadAccessibilitySettings,
@@ -18,8 +19,22 @@ import {
   DEFAULT_ACCESSIBILITY_SETTINGS,
   type AccessibilitySettings,
 } from "./a11y/settings";
-import { playSound } from "./audio/soundEngine";
+import { playSound, playSpatialSound, resumeAudioEngine } from "./audio/soundEngine";
 import { CONTENT_VERSION, NATIVE_VERSION } from "./appVersion";
+import {
+  createRadarSummary,
+  RADAR_COOLDOWN_MS,
+  relativeBearingDegrees,
+} from "./core/radar";
+import { getSpatialAudioProfile } from "./core/spatialAudio";
+import { moveShip, turnShip, type ShipPose } from "./core/sector";
+import {
+  A2_MAP_OBJECTS,
+  A2_SECTOR_OBJECTS,
+  SECTOR_WORLD_SIZE,
+} from "./data/sectors";
+import { INITIAL_SCOUT_POSE, ships } from "./data/ships";
+import { SOUND_ID } from "./data/sounds";
 import {
   compareVersions,
   getInstalledContentVersion,
@@ -28,7 +43,7 @@ import {
   STABLE_APK_URL,
 } from "./updates/updateService";
 
-type Screen = "home" | "settings" | "help";
+type Screen = "home" | "settings" | "help" | "sector";
 
 interface LiveAnnouncement {
   message: string;
@@ -40,12 +55,14 @@ const SCREEN_TITLES: Record<Screen, string> = {
   home: "Ana menü",
   settings: "Ayarlar",
   help: "Yardım",
+  sector: "Sektör A-2",
 };
 
 const SCREEN_HEADING_IDS: Record<Screen, string> = {
   home: "home-title",
   settings: "settings-title",
   help: "help-title",
+  sector: "sector-title",
 };
 
 function App() {
@@ -57,6 +74,9 @@ function App() {
   const [talkBackEnabled, setTalkBackEnabled] = useState(false);
   const [screenReaderReady, setScreenReaderReady] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [shipPose, setShipPose] = useState<ShipPose>({
+    ...INITIAL_SCOUT_POSE,
+  });
   const [liveAnnouncement, setLiveAnnouncement] = useState<LiveAnnouncement>({
     message: "",
     priority: 4,
@@ -64,12 +84,16 @@ function App() {
   });
 
   const settingsRef = useRef(settings);
+  const shipPoseRef = useRef<ShipPose>({ ...INITIAL_SCOUT_POSE });
   const talkBackRef = useRef(false);
   const lastSavedSettingsRef = useRef(
     JSON.stringify(DEFAULT_ACCESSIBILITY_SETTINGS),
   );
   const previousScreenRef = useRef<Screen>("home");
-  const openerRef = useRef<"settings" | "help" | null>(null);
+  const openerRef = useRef<"settings" | "help" | "sector" | null>(null);
+  const radarLastScanRef = useRef<number | null>(null);
+  const spatialCueTimesRef = useRef(new Map<string, number>());
+  const lastSpatialCueAtRef = useRef(0);
   const liveSequenceRef = useRef(0);
   const notificationQueueRef = useRef(new NotificationQueue());
   const readerReadyPromiseRef = useRef<Promise<void> | null>(null);
@@ -249,7 +273,11 @@ function App() {
     const animationFrame = window.requestAnimationFrame(() => {
       if (screen === "home" && previousScreen !== "home") {
         const openerId =
-          openerRef.current === "settings" ? "open-settings" : "open-help";
+          openerRef.current === "settings"
+            ? "open-settings"
+            : openerRef.current === "sector"
+              ? "open-sector"
+              : "open-help";
         document.getElementById(openerId)?.focus({ preventScroll: true });
         return;
       }
@@ -267,6 +295,66 @@ function App() {
       window.cancelAnimationFrame(animationFrame);
     };
   }, [announce, screen, screenReaderReady]);
+
+  useEffect(() => {
+    if (screen !== "sector" || settings.directionVolume <= 0) {
+      return;
+    }
+
+    const checkSpatialCues = () => {
+      if (document.hidden) {
+        return;
+      }
+
+      const now = Date.now();
+      const dueTargets = A2_SECTOR_OBJECTS.map((object) => {
+        const distance = Math.hypot(
+          object.x - shipPose.x,
+          object.y - shipPose.y,
+        );
+        const relativeBearing = relativeBearingDegrees(shipPose, object);
+        return {
+          object,
+          distance,
+          relativeBearing,
+          profile: getSpatialAudioProfile(distance, relativeBearing),
+        };
+      })
+        .filter(
+          ({ object, profile }) =>
+            profile.audible &&
+            now >= (spatialCueTimesRef.current.get(object.id) ?? 0),
+        )
+        .sort((left, right) => left.distance - right.distance);
+
+      const nextCue = dueTargets[0];
+      if (!nextCue || now - lastSpatialCueAtRef.current < 350) {
+        return;
+      }
+
+      spatialCueTimesRef.current.set(
+        nextCue.object.id,
+        now + nextCue.profile.cueIntervalMs,
+      );
+      lastSpatialCueAtRef.current = now;
+      const soundId =
+        nextCue.object.kind === "gate"
+          ? SOUND_ID.gateSignal
+          : SOUND_ID.ferritSignal;
+      void playSpatialSound(
+        soundId,
+        nextCue.distance,
+        nextCue.relativeBearing,
+        settings.directionVolume / 100,
+      ).catch((error: unknown) => {
+        console.warn("Sektörün yönlü işareti çalınamadı.", error);
+      });
+    };
+
+    checkSpatialCues();
+    const interval = window.setInterval(checkSpatialCues, 250);
+    return () => window.clearInterval(interval);
+  }, [screen, settings.directionVolume, shipPose]);
 
   useEffect(() => {
     if (!settingsReady || !screenReaderReady || !isNativeApp()) {
@@ -330,6 +418,22 @@ function App() {
     setScreen("settings");
   }, []);
 
+  const enterSector = useCallback(() => {
+    openerRef.current = "sector";
+    spatialCueTimesRef.current.clear();
+    lastSpatialCueAtRef.current = 0;
+    try {
+      void resumeAudioEngine().catch((error: unknown) => {
+        console.warn("Ses motoru başlatılamadı.", error);
+        void announce("Ses motoru başlatılamadı.", 2);
+      });
+    } catch (error) {
+      console.warn("Ses motoru başlatılamadı.", error);
+      void announce("Ses motoru başlatılamadı.", 2);
+    }
+    setScreen("sector");
+  }, [announce]);
+
   const openHelp = useCallback(() => {
     openerRef.current = "help";
     setScreen("help");
@@ -338,6 +442,111 @@ function App() {
   const returnToHome = useCallback(() => {
     setScreen("home");
   }, []);
+
+  const updateShipPose = useCallback((nextPose: ShipPose) => {
+    shipPoseRef.current = nextPose;
+    setShipPose(nextPose);
+  }, []);
+
+  const readSectorStatus = useCallback(() => {
+    const current = shipPoseRef.current;
+    const formatNumber = new Intl.NumberFormat("tr-TR");
+    void announce(
+      `Sektör A-2. Birlik Aster. Gemi İzci. Konum X ${formatNumber.format(current.x)}, Y ${formatNumber.format(current.y)}. Yön ${formatNumber.format(Math.round(current.headingDegrees))} derece. Hız ${ships[0].speed} birim.`,
+      4,
+    );
+  }, [announce]);
+
+  const readRadarSummary = useCallback(() => {
+    const now = Date.now();
+    const lastScanAt = radarLastScanRef.current;
+    if (lastScanAt !== null && now - lastScanAt < RADAR_COOLDOWN_MS) {
+      const remaining = Math.ceil(
+        (RADAR_COOLDOWN_MS - (now - lastScanAt)) / 1_000,
+      );
+      void announce(`Radar için ${remaining} saniye bekle.`, 2);
+      return;
+    }
+
+    radarLastScanRef.current = now;
+    void playSound(
+      SOUND_ID.radarScan,
+      settingsRef.current.effectsVolume / 100,
+    ).catch(
+      (error: unknown) => {
+        console.warn("Radar tarama sesi çalınamadı.", error);
+      },
+    );
+    void announce(
+      createRadarSummary(
+        shipPoseRef.current,
+        A2_SECTOR_OBJECTS,
+        settingsRef.current.directionFormat,
+      ),
+      4,
+    );
+  }, [announce]);
+
+  const turnLeft = useCallback(() => {
+    const nextPose = turnShip(shipPoseRef.current, "left");
+    updateShipPose(nextPose);
+    void playSound(SOUND_ID.shipTurn, settingsRef.current.effectsVolume / 100).catch(
+      (error: unknown) => {
+        console.warn("Dönüş sesi çalınamadı.", error);
+      },
+    );
+    void announce(`Yön ${Math.round(nextPose.headingDegrees)} derece.`, 4);
+  }, [announce, updateShipPose]);
+
+  const turnRight = useCallback(() => {
+    const nextPose = turnShip(shipPoseRef.current, "right");
+    updateShipPose(nextPose);
+    void playSound(SOUND_ID.shipTurn, settingsRef.current.effectsVolume / 100).catch(
+      (error: unknown) => {
+        console.warn("Dönüş sesi çalınamadı.", error);
+      },
+    );
+    void announce(`Yön ${Math.round(nextPose.headingDegrees)} derece.`, 4);
+  }, [announce, updateShipPose]);
+
+  const moveForward = useCallback(() => {
+    const result = moveShip(
+      shipPoseRef.current,
+      ships[0].speed,
+      SECTOR_WORLD_SIZE,
+    );
+    updateShipPose(result.pose);
+
+    if (result.reachedBoundary) {
+      void playSpatialSound(
+        SOUND_ID.sectorBoundary,
+        0,
+        0,
+        settingsRef.current.directionVolume / 100,
+      ).catch((error: unknown) => {
+        console.warn("Sektör sınırı sesi çalınamadı.", error);
+      });
+      void announce(
+        "Sektör sınırı. Gemi 10.000 birimlik alanın içinde tutuldu.",
+        2,
+      );
+      return;
+    }
+
+    void playSound(
+      SOUND_ID.engineCruise,
+      settingsRef.current.effectsVolume / 100,
+    ).catch(
+      (error: unknown) => {
+        console.warn("Gemi hareket sesi çalınamadı.", error);
+      },
+    );
+    const formatNumber = new Intl.NumberFormat("tr-TR");
+    void announce(
+      `300 birim ilerledin. X ${formatNumber.format(result.pose.x)}, Y ${formatNumber.format(result.pose.y)}.`,
+      4,
+    );
+  }, [announce, updateShipPose]);
 
   const updateSettings = useCallback(
     (changes: Partial<AccessibilitySettings>) => {
@@ -367,7 +576,12 @@ function App() {
   );
 
   const runEarTest = useCallback(
-    (soundId: 227 | 228, earName: "sol" | "sağ") => {
+    (
+      soundId:
+        | typeof SOUND_ID.leftEarTest
+        | typeof SOUND_ID.rightEarTest,
+      earName: "sol" | "sağ",
+    ) => {
       const volume = settingsRef.current.directionVolume / 100;
       if (volume === 0) {
         void announce("Yön seslerinin düzeyi sıfır.", 2);
@@ -392,9 +606,7 @@ function App() {
   const visibleScreen =
     screen === "home" ? (
       <HomeScreen
-        onSectorExit={() => {
-          void announce("Sektöre çık yakında kullanılabilir.", 2);
-        }}
+        onSectorExit={enterSector}
         onOpenSettings={openSettings}
         onOpenHelp={openHelp}
         updateAvailable={updateAvailable}
@@ -404,8 +616,21 @@ function App() {
       <SettingsScreen
         settings={settings}
         onSettingsChange={updateSettings}
-        onLeftEarTest={() => runEarTest(227, "sol")}
-        onRightEarTest={() => runEarTest(228, "sağ")}
+        onLeftEarTest={() => runEarTest(SOUND_ID.leftEarTest, "sol")}
+        onRightEarTest={() => runEarTest(SOUND_ID.rightEarTest, "sağ")}
+        onBack={returnToHome}
+      />
+    ) : screen === "sector" ? (
+      <SectorScreen
+        sectorName="A-2"
+        worldSize={SECTOR_WORLD_SIZE}
+        ship={shipPose}
+        objects={A2_MAP_OBJECTS}
+        onStatus={readSectorStatus}
+        onRadar={readRadarSummary}
+        onTurnLeft={turnLeft}
+        onMoveForward={moveForward}
+        onTurnRight={turnRight}
         onBack={returnToHome}
       />
     ) : (

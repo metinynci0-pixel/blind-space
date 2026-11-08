@@ -24,6 +24,7 @@ const HomeScreen: FC<HomeScreenProps> = ({
 
       <nav className="home-actions" aria-label="Ana menü">
         <button
+          id="open-sector"
           className="blind-button blind-button--primary"
           type="button"
           aria-label="Sektöre çık"

@@ -1,7 +1,52 @@
+import { getSpatialAudioProfile } from "../core/spatialAudio";
+import { SOUND_ID } from "../data/sounds";
+
 const MIN_SOUND_ID = 1;
 const MAX_SOUND_ID = 255;
 
-type EarTestSoundId = 227 | 228;
+type EarTestSoundId =
+  | typeof SOUND_ID.leftEarTest
+  | typeof SOUND_ID.rightEarTest;
+type TemporarySoundId =
+  | typeof SOUND_ID.engineCruise
+  | typeof SOUND_ID.shipTurn
+  | typeof SOUND_ID.sectorBoundary
+  | typeof SOUND_ID.gateSignal
+  | typeof SOUND_ID.radarScan
+  | typeof SOUND_ID.ferritSignal;
+type SpatialSoundId =
+  | typeof SOUND_ID.engineCruise
+  | typeof SOUND_ID.sectorBoundary
+  | typeof SOUND_ID.gateSignal
+  | typeof SOUND_ID.ferritSignal;
+
+const TEMPORARY_SOUNDS: Record<
+  TemporarySoundId,
+  { frequency: number; duration: number; waveform: OscillatorType }
+> = {
+  [SOUND_ID.engineCruise]: {
+    frequency: 92,
+    duration: 0.2,
+    waveform: "sawtooth",
+  },
+  [SOUND_ID.shipTurn]: { frequency: 480, duration: 0.12, waveform: "sine" },
+  [SOUND_ID.sectorBoundary]: {
+    frequency: 130,
+    duration: 0.28,
+    waveform: "triangle",
+  },
+  [SOUND_ID.gateSignal]: { frequency: 190, duration: 0.32, waveform: "sine" },
+  [SOUND_ID.radarScan]: {
+    frequency: 720,
+    duration: 0.2,
+    waveform: "triangle",
+  },
+  [SOUND_ID.ferritSignal]: {
+    frequency: 580,
+    duration: 0.24,
+    waveform: "sine",
+  },
+};
 
 let audioContext: AudioContext | undefined;
 const decodedBuffers = new Map<number, AudioBuffer>();
@@ -56,7 +101,7 @@ function playTemporaryEarTestTone(
 ): void {
   const oscillator = context.createOscillator();
   const gain = context.createGain();
-  const ear = soundId === 227 ? "left" : "right";
+  const ear = soundId === SOUND_ID.leftEarTest ? "left" : "right";
   const startTime = context.currentTime;
 
   oscillator.type = "sine";
@@ -71,6 +116,36 @@ function playTemporaryEarTestTone(
   oscillator.stop(startTime + 0.34);
 }
 
+function playTemporarySound(
+  context: AudioContext,
+  soundId: TemporarySoundId,
+  volume: number,
+): void {
+  const specification = TEMPORARY_SOUNDS[soundId];
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  const startTime = context.currentTime;
+  oscillator.type = specification.waveform;
+  oscillator.frequency.setValueAtTime(specification.frequency, startTime);
+  if (soundId === SOUND_ID.radarScan) {
+    oscillator.frequency.exponentialRampToValueAtTime(
+      specification.frequency * 1.6,
+      startTime + specification.duration,
+    );
+  }
+
+  gain.gain.setValueAtTime(0.001, startTime);
+  gain.gain.exponentialRampToValueAtTime(
+    Math.max(0.001, 0.24 * volume),
+    startTime + 0.02,
+  );
+  gain.gain.exponentialRampToValueAtTime(0.001, startTime + specification.duration);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(startTime);
+  oscillator.stop(startTime + specification.duration + 0.01);
+}
+
 function resumeAudioContext(context: AudioContext): Promise<void> {
   if (context.state === "running") {
     return Promise.resolve();
@@ -81,6 +156,77 @@ function resumeAudioContext(context: AudioContext): Promise<void> {
       throw new Error("Ses motoru başlatılamadı.");
     }
   });
+}
+
+export function resumeAudioEngine(): Promise<void> {
+  return resumeAudioContext(getAudioContext());
+}
+
+export async function playSpatialSound(
+  soundId: SpatialSoundId,
+  distance: number,
+  relativeBearingDegrees: number,
+  volume = 1,
+): Promise<void> {
+  const profile = getSpatialAudioProfile(distance, relativeBearingDegrees);
+  if (!profile.audible) {
+    return;
+  }
+
+  const normalizedVolume = Number.isFinite(volume)
+    ? Math.max(0, Math.min(1, volume))
+    : 1;
+  if (normalizedVolume === 0) {
+    return;
+  }
+
+  const context = getAudioContext();
+  const audioReady = resumeAudioContext(context);
+  await audioReady;
+
+  const specification = TEMPORARY_SOUNDS[soundId];
+  const oscillator = context.createOscillator();
+  const filter = context.createBiquadFilter();
+  const gain = context.createGain();
+  const startTime = context.currentTime;
+  oscillator.type = specification.waveform;
+  oscillator.frequency.setValueAtTime(specification.frequency, startTime);
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(profile.lowPassFrequencyHz, startTime);
+  gain.gain.setValueAtTime(0.001, startTime);
+  gain.gain.exponentialRampToValueAtTime(
+    Math.max(0.001, 0.24 * normalizedVolume * profile.gain),
+    startTime + 0.025,
+  );
+  gain.gain.exponentialRampToValueAtTime(0.001, startTime + specification.duration);
+
+  oscillator.connect(filter);
+  filter.connect(gain);
+
+  if (typeof context.createPanner === "function") {
+    const panner = context.createPanner();
+    const angle = (relativeBearingDegrees * Math.PI) / 180;
+    panner.panningModel = "HRTF";
+    panner.distanceModel = "linear";
+    panner.refDistance = 1;
+    panner.maxDistance = 1;
+    panner.rolloffFactor = 0;
+    panner.positionX.setValueAtTime(Math.sin(angle), startTime);
+    panner.positionY.setValueAtTime(0, startTime);
+    panner.positionZ.setValueAtTime(-Math.cos(angle), startTime);
+    gain.connect(panner);
+    panner.connect(context.destination);
+  } else if (typeof context.createStereoPanner === "function") {
+    const panner = context.createStereoPanner();
+    panner.pan.setValueAtTime(profile.pan, startTime);
+    gain.connect(panner);
+    panner.connect(context.destination);
+  } else {
+    gain.connect(context.destination);
+  }
+
+  oscillator.start(startTime);
+  oscillator.stop(startTime + specification.duration + 0.01);
 }
 
 async function loadSound(
@@ -121,12 +267,27 @@ export async function playSound(soundId: number, volume = 1): Promise<void> {
   // Call resume synchronously from the button gesture, before the first await.
   const audioReady = resumeAudioContext(context);
 
-  if (soundId === 227 || soundId === 228) {
+  if (
+    soundId === SOUND_ID.leftEarTest ||
+    soundId === SOUND_ID.rightEarTest
+  ) {
     await audioReady;
     if (normalizedVolume > 0) {
       playTemporaryEarTestTone(
         context,
         soundId as EarTestSoundId,
+        normalizedVolume,
+      );
+    }
+    return;
+  }
+
+  if (soundId in TEMPORARY_SOUNDS) {
+    await audioReady;
+    if (normalizedVolume > 0) {
+      playTemporarySound(
+        context,
+        soundId as TemporarySoundId,
         normalizedVolume,
       );
     }

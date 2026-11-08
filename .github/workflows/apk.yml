@@ -35,6 +35,9 @@ jobs:
       - name: Test APK release decision
         run: node --test scripts/prepare-release.test.mjs
 
+      - name: Test game movement, radar, and spatial audio
+        run: npm test
+
       - name: Fetch latest main metadata
         run: git fetch origin main
 
