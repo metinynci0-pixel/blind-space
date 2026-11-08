@@ -12,8 +12,14 @@
     "android:sync": "cap sync android"
   },
   "dependencies": {
+    "@capacitor-community/text-to-speech": "6.1.0",
     "@capacitor/android": "^7.6.10",
+    "@capacitor/browser": "7.0.5",
     "@capacitor/core": "^7.6.10",
+    "@capacitor/haptics": "7.0.5",
+    "@capacitor/preferences": "7.0.4",
+    "@capacitor/screen-reader": "7.0.4",
+    "@capgo/capacitor-updater": "7.53.0",
     "react": "19.1.0",
     "react-dom": "19.1.0"
   },

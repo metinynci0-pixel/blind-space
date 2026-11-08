@@ -1,4 +1,4 @@
-name: Build and publish Android APK
+name: Publish Blind Space updates
 
 on:
   push:
@@ -8,13 +8,20 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: blind-space-main-release
+  queue: max
+  cancel-in-progress: false
+
 jobs:
   build-and-release:
-    name: Build signed APK and publish release
+    name: Publish game content and required Android APK
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -25,19 +32,46 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev --no-audit --no-fund --registry=https://registry.npmjs.org/
 
+      - name: Test APK release decision
+        run: node --test scripts/prepare-release.test.mjs
+
+      - name: Fetch latest main metadata
+        run: git fetch origin main
+
+      - name: Calculate release versions and native changes
+        id: release
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: node scripts/prepare-release.mjs
+
       - name: Build web application
+        env:
+          VITE_NATIVE_VERSION: ${{ steps.release.outputs.native_version }}
+          VITE_CONTENT_VERSION: ${{ steps.release.outputs.content_version }}
         run: npm run build
 
       - name: Sync Capacitor Android project
+        env:
+          VITE_NATIVE_VERSION: ${{ steps.release.outputs.native_version }}
+          VITE_CONTENT_VERSION: ${{ steps.release.outputs.content_version }}
         run: npx cap sync android
 
+      - name: Package web content for live updates
+        run: |
+          mkdir -p release-assets
+          (cd app/dist && zip -qr "$GITHUB_WORKSPACE/release-assets/blind-space-update.zip" .)
+
       - name: Set up Java 17
+        if: steps.release.outputs.needs_apk == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Prepare Android signing key
+        if: steps.release.outputs.needs_apk == 'true'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -45,13 +79,16 @@ jobs:
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/release-keystore.p12
 
       - name: Build signed release APK
+        if: steps.release.outputs.needs_apk == 'true'
         env:
           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/release-keystore.p12
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION_CODE: ${{ github.run_number }}
-          VERSION_NAME: 0.1.${{ github.run_number }}
+          VERSION_NAME: ${{ steps.release.outputs.content_version }}
+          VITE_NATIVE_VERSION: ${{ steps.release.outputs.native_version }}
+          VITE_CONTENT_VERSION: ${{ steps.release.outputs.content_version }}
         run: |
           cd android
           ./gradlew \
@@ -60,18 +97,70 @@ jobs:
             assembleRelease
 
       - name: Name the direct-download APK
+        if: steps.release.outputs.needs_apk == 'true'
         run: |
           mkdir -p release-assets
           cp android/app/build/outputs/apk/release/app-release.apk release-assets/blind-space.apk
 
-      - name: Publish APK as the latest release
+      - name: Publish versioned OTA package
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.${{ github.run_number }}
-          name: Blind Space v0.1.${{ github.run_number }}
-          body: "Blind Space Android APK — sürüm 0.1.${{ github.run_number }}"
+          tag_name: ${{ steps.release.outputs.ota_tag }}
+          name: Blind Space içerik ${{ steps.release.outputs.content_version }}
+          body: "Blind Space oyun içeriği güncellemesi — ${{ steps.release.outputs.content_version }}"
+          files: release-assets/blind-space-update.zip
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: true
+
+      - name: Publish APK as the latest stable release
+        if: steps.release.outputs.needs_apk == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.apk_tag }}
+          name: Blind Space ${{ steps.release.outputs.content_version }}
+          body: "Blind Space Android APK — sürüm ${{ steps.release.outputs.content_version }}"
           files: release-assets/blind-space.apk
           make_latest: true
+          overwrite_files: true
           fail_on_unmatched_files: true
           draft: false
           prerelease: false
+
+      - name: Prepare latest OTA manifest
+        env:
+          CONTENT_VERSION: ${{ steps.release.outputs.content_version }}
+          NATIVE_VERSION: ${{ steps.release.outputs.native_version }}
+          OTA_TAG: ${{ steps.release.outputs.ota_tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/write-update-manifest.mjs "$RUNNER_TEMP/latest.json"
+
+      - name: Publish latest OTA manifest on main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git checkout -B update-manifest origin/main
+            mkdir -p updates
+            cp "$RUNNER_TEMP/latest.json" updates/latest.json
+            git add updates/latest.json
+            if git diff --cached --quiet; then
+              echo "Latest OTA manifest already matches."
+              exit 0
+            fi
+            git commit -m "chore: update latest OTA manifest"
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git reset --hard origin/main
+            sleep "$attempt"
+          done
+
+          echo "Could not publish latest OTA manifest after three attempts." >&2
+          exit 1
