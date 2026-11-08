@@ -46,12 +46,21 @@ jobs:
 
       - name: Build web application
         env:
+          BASE_PATH: ./
           VITE_NATIVE_VERSION: ${{ steps.release.outputs.native_version }}
           VITE_CONTENT_VERSION: ${{ steps.release.outputs.content_version }}
         run: npm run build
 
+      - name: Verify OTA asset paths
+        run: |
+          if grep -Eq '(src|href)="/assets/' app/dist/index.html; then
+            echo "OTA bundle must use relative asset paths."
+            exit 1
+          fi
+
       - name: Sync Capacitor Android project
         env:
+          BASE_PATH: ./
           VITE_NATIVE_VERSION: ${{ steps.release.outputs.native_version }}
           VITE_CONTENT_VERSION: ${{ steps.release.outputs.content_version }}
         run: npx cap sync android
